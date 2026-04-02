@@ -4,10 +4,10 @@
 """
 
 # Токен Telegram-бота
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = "8679464341:AAHNzKcINgvpAMiCNETeO-jCZjx9NoQQAJk"
 
 # ID администратора (ваш Telegram ID)
-ADMIN_ID = 123456789
+ADMIN_ID = 653231861
 
 # ID канала для отправки расписания (-1001234567890)
 SCHEDULE_CHANNEL_ID = -1001234567890
