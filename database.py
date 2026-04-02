@@ -7,7 +7,6 @@ import sqlite3
 import aiosqlite
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
-import config
 
 
 class Database:
@@ -20,7 +19,6 @@ class Database:
     async def init_db(self):
         """Создание таблиц в базе данных."""
         async with aiosqlite.connect(self.db_path) as db:
-            # Таблица рабочих дней
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS work_days (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,7 +28,6 @@ class Database:
                 )
             """)
 
-            # Таблица временных слотов
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS time_slots (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,7 +39,6 @@ class Database:
                 )
             """)
 
-            # Таблица записей клиентов
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS bookings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,7 +52,6 @@ class Database:
                 )
             """)
 
-            # Таблица напоминаний для APScheduler
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS reminders (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,11 +68,9 @@ class Database:
     async def generate_work_days(self):
         """Генерация рабочих дней на 1 месяц вперед."""
         async with aiosqlite.connect(self.db_path) as db:
-            # Получаем существующие даты
             cursor = await db.execute("SELECT date FROM work_days")
             existing_dates = {row[0] for row in await cursor.fetchall()}
 
-            # Генерируем даты на 1 месяц вперед
             today = datetime.now().date()
             new_dates = []
 
@@ -92,6 +85,15 @@ class Database:
                     "INSERT OR IGNORE INTO work_days (date) VALUES (?)",
                     new_dates
                 )
+                await db.commit()
+                
+                for date_str, in new_dates:
+                    for hour in range(9, 19):
+                        time = f"{hour:02d}:00"
+                        await db.execute(
+                            "INSERT OR IGNORE INTO time_slots (date, time) VALUES (?, ?)",
+                            (date_str, time)
+                        )
                 await db.commit()
 
     async def get_available_dates(self) -> List[str]:
@@ -125,7 +127,6 @@ class Database:
                 )
                 await db.commit()
                 return True
-            return False
         except Exception:
             return False
 
@@ -149,7 +150,7 @@ class Database:
             """, (date,))
             return [row[0] for row in await cursor.fetchall()]
 
-    async def get_all_slots(self, date: str) -> List[Tuple[str, int]]:
+    async def get_all_slots(self, date: str) -> List[Tuple]:
         """Получение всех временных слотов на дату."""
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute("""
@@ -173,7 +174,6 @@ class Database:
                            phone: str, date: str, time: str) -> bool:
         """Создание записи клиента."""
         async with aiosqlite.connect(self.db_path) as db:
-            # Проверяем, доступен ли слот
             cursor = await db.execute("""
                 SELECT is_available FROM time_slots 
                 WHERE date = ? AND time = ?
@@ -183,17 +183,14 @@ class Database:
             if not result or result[0] == 0:
                 return False
 
-            # Создаем запись
             await db.execute("""
                 INSERT INTO bookings (user_id, user_name, phone, date, time)
                 VALUES (?, ?, ?, ?, ?)
             """, (user_id, user_name, phone, date, time))
             
-            # Получаем ID записи
             cursor = await db.execute("SELECT last_insert_rowid()")
             booking_id = (await cursor.fetchone())[0]
 
-            # Делаем слот недоступным
             await db.execute("""
                 UPDATE time_slots 
                 SET is_available = 0, booking_id = ?
@@ -218,7 +215,6 @@ class Database:
         """Отмена записи клиента."""
         async with aiosqlite.connect(self.db_path) as db:
             if booking_id:
-                # Получаем информацию о записи
                 cursor = await db.execute(
                     "SELECT date, time FROM bookings WHERE id = ? AND user_id = ?",
                     (booking_id, user_id)
@@ -230,19 +226,16 @@ class Database:
 
                 date, time = booking
 
-                # Удаляем напоминание
                 await db.execute(
                     "DELETE FROM reminders WHERE booking_id = ?",
                     (booking_id,)
                 )
 
-                # Удаляем запись
                 await db.execute(
                     "DELETE FROM bookings WHERE id = ?",
                     (booking_id,)
                 )
 
-                # Делаем слот доступным
                 await db.execute("""
                     UPDATE time_slots 
                     SET is_available = 1, booking_id = NULL
@@ -252,7 +245,6 @@ class Database:
                 await db.commit()
                 return True
             else:
-                # Получаем последнюю запись
                 cursor = await db.execute(
                     "SELECT id, date, time FROM bookings WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
                     (user_id,)
@@ -264,19 +256,16 @@ class Database:
 
                 booking_id, date, time = booking
 
-                # Удаляем напоминание
                 await db.execute(
                     "DELETE FROM reminders WHERE booking_id = ?",
                     (booking_id,)
                 )
 
-                # Удаляем запись
                 await db.execute(
                     "DELETE FROM bookings WHERE id = ?",
                     (booking_id,)
                 )
 
-                # Делаем слот доступным
                 await db.execute("""
                     UPDATE time_slots 
                     SET is_available = 1, booking_id = NULL
@@ -287,7 +276,7 @@ class Database:
                 return True
 
     async def get_all_bookings(self, date: str = None) -> List[Tuple]:
-        """Получение всех записей (опционально на дату)."""
+        """Получение всех записей."""
         async with aiosqlite.connect(self.db_path) as db:
             if date:
                 cursor = await db.execute("""
@@ -385,5 +374,4 @@ class Database:
             await db.commit()
 
 
-# Создание экземпляра базы данных
 db = Database()

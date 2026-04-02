@@ -533,7 +533,7 @@ async def admin_select_slot_date(callback: CallbackQuery, bot: Bot, state: FSMCo
     """Выбор даты для добавления слота."""
     current_state = await state.get_state()
     if current_state != AdminStates.waiting_for_slot_date:
-        await callback.answer()
+        await callback.answer("Сначала выберите действие в админ-панели", show_alert=True)
         return
     
     date = callback.data.replace("admin_slot_date_", "")
