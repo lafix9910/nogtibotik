@@ -1,13 +1,13 @@
 """
-Обработчики сообщений и колбэков бота.
+Oбработчики сообщений и колбэков бота.
 Содержит все обработчики для команд, callback-запросов и сообщений пользователей.
 """
 
 from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
-from datetime import datetime, timedelta
-from states import BookingStates, AdminStates, SubscriptionCheck
+from datetime import datetime
+from states import BookingStates, AdminStates
 from keyboards import (
     get_main_menu_keyboard, get_prices_keyboard, get_portfolio_keyboard,
     get_subscription_keyboard, create_calendar_keyboard, create_time_keyboard,
@@ -16,22 +16,25 @@ from keyboards import (
     get_admin_bookings_keybook
 )
 from database import db
-from utils import check_subscription, schedule_reminder, cancel_reminder, format_date_russian, format_time_russian
-from bot import scheduler
+from utils import check_subscription, schedule_reminder, cancel_reminder, format_date_russian
 import config
 
+# Планировщик будет установлен при инициализации бота
+scheduler = None
 
-# Создаем роутер
+def set_scheduler(s):
+    global scheduler
+    scheduler = s
+
+
 router = Router()
 
-
-# ==================== Главное меню ====================
 
 @router.message(F.text == "/start")
 async def cmd_start(message: Message, bot: Bot):
     """Обработчик команды /start."""
     await message.answer(
-        f"Добро пожаловать к мастеру маникюра {config.MASTER_NAME}! ✨\n\n"
+        f"Добро пожаловать к мастеру маникюра {config.MASTER_NAME}! \n\n"
         f"Выберите действие из меню ниже:",
         reply_markup=get_main_menu_keyboard()
     )
@@ -41,43 +44,37 @@ async def cmd_start(message: Message, bot: Bot):
 async def back_to_menu(callback: CallbackQuery, bot: Bot):
     """Возврат в главное меню."""
     await callback.message.edit_text(
-        f"Добро пожаловать к мастеру маникюра {config.MASTER_NAME}! ✨\n\n"
+        f"Добро пожаловать к мастеру маникюра {config.MASTER_NAME}! \n\n"
         f"Выберите действие из меню ниже:",
         reply_markup=get_main_menu_keyboard()
     )
     await callback.answer()
 
 
-# ==================== Прайсы ====================
-
 @router.callback_query(F.data == "prices")
 async def show_prices(callback: CallbackQuery, bot: Bot):
     """Показ прайсов."""
     await callback.message.edit_text(
-        "<b>ПРАЙС-ЛИСТ</b> 💅\n\n"
-        "• <b>Френч</b> — 1000₽\n"
-        "• <b>Квадрат</b> — 500₽",
+        "<b>ПРАЙС-ЛИСТ</b> \n\n"
+        "- <b>Френч</b> - 1000 \n"
+        "- <b>Квадрат</b> - 500",
         reply_markup=get_prices_keyboard(),
         parse_mode="HTML"
     )
     await callback.answer()
 
 
-# ==================== Портфолио ====================
-
 @router.callback_query(F.data == "portfolio")
 async def show_portfolio(callback: CallbackQuery, bot: Bot):
     """Показ портфолио."""
     await callback.message.edit_text(
-        "🖼️ <b>Портфолио работ</b>\n\n"
+        "<b>Портфолио работ</b>\n\n"
         "Нажмите на кнопку ниже, чтобы посмотреть наши работы:",
         reply_markup=get_portfolio_keyboard(),
         parse_mode="HTML"
     )
     await callback.answer()
 
-
-# ==================== Проверка подписки ====================
 
 @router.callback_query(F.data == "check_subscription")
 async def check_user_subscription(callback: CallbackQuery, bot: Bot, state: FSMContext):
@@ -89,14 +86,14 @@ async def check_user_subscription(callback: CallbackQuery, bot: Bot, state: FSMC
     if is_subscribed:
         await state.update_data(subscription_verified=True)
         await callback.message.edit_text(
-            "✅ <b>Подписка подтверждена!</b>\n\n"
+            "<b>Подписка подтверждена!</b>\n\n"
             "Теперь вы можете записаться на приём.",
             reply_markup=get_main_menu_keyboard(),
             parse_mode="HTML"
         )
     else:
         await callback.message.edit_text(
-            "❌ <b>Вы не подписаны на канал</b>\n\n"
+            "<b>Вы не подписаны на канал</b>\n\n"
             "Для записи необходимо подписаться на канал.",
             reply_markup=get_subscription_keyboard(),
             parse_mode="HTML"
@@ -105,34 +102,15 @@ async def check_user_subscription(callback: CallbackQuery, bot: Bot, state: FSMC
     await callback.answer()
 
 
-async def require_subscription(bot: Bot, user_id: int, message: Message, state: FSMContext):
-    """Проверка подписки перед записью."""
-    is_subscribed = await check_subscription(bot, user_id)
-    
-    if not is_subscribed:
-        await message.answer(
-            "❌ <b>Вы не подписаны на канал</b>\n\n"
-            "Для записи необходимо подписаться на канал.",
-            reply_markup=get_subscription_keyboard(),
-            parse_mode="HTML"
-        )
-        return False
-    
-    return True
-
-
-# ==================== Запись ====================
-
 @router.callback_query(F.data == "booking")
 async def start_booking(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Начало процесса записи."""
     user_id = callback.from_user.id
     
-    # Проверяем подписку
     is_subscribed = await check_subscription(bot, user_id)
     if not is_subscribed:
         await callback.message.edit_text(
-            "❌ <b>Вы не подписаны на канал</b>\n\n"
+            "<b>Вы не подписаны на канал</b>\n\n"
             "Для записи необходимо подписаться на канал.",
             reply_markup=get_subscription_keyboard(),
             parse_mode="HTML"
@@ -140,11 +118,10 @@ async def start_booking(callback: CallbackQuery, bot: Bot, state: FSMContext):
         await callback.answer()
         return
     
-    # Проверяем, есть ли уже активная запись
     has_booking = await db.has_active_booking(user_id)
     if has_booking:
         await callback.message.edit_text(
-            "❌ <b>У вас уже есть активная запись!</b>\n\n"
+            "<b>У вас уже есть активная запись!</b>\n\n"
             "Вы можете отменить её и создать новую.",
             reply_markup=get_main_menu_keyboard(),
             parse_mode="HTML"
@@ -152,11 +129,10 @@ async def start_booking(callback: CallbackQuery, bot: Bot, state: FSMContext):
         await callback.answer()
         return
     
-    # Показываем календарь
     dates = await db.get_available_dates()
     
     await callback.message.edit_text(
-        "📅 <b>Выберите дату</b>\n\n"
+        "<b>Выберите дату</b>\n\n"
         "Доступные даты на ближайший месяц:",
         reply_markup=create_calendar_keyboard(dates),
         parse_mode="HTML"
@@ -166,13 +142,18 @@ async def start_booking(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "back_to_dates", state=BookingStates.waiting_for_time)
+@router.callback_query(F.data == "back_to_dates")
 async def back_to_dates(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Возврат к выбору даты."""
+    current_state = await state.get_state()
+    if current_state != BookingStates.waiting_for_time:
+        await callback.answer()
+        return
+    
     dates = await db.get_available_dates()
     
     await callback.message.edit_text(
-        "📅 <b>Выберите дату</b>\n\n"
+        "<b>Выберите дату</b>\n\n"
         "Доступные даты на ближайший месяц:",
         reply_markup=create_calendar_keyboard(dates),
         parse_mode="HTML"
@@ -182,29 +163,31 @@ async def back_to_dates(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("date_"), state=BookingStates.waiting_for_date)
+@router.callback_query(F.data.startswith("date_"))
 async def select_date(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Выбор даты."""
+    current_state = await state.get_state()
+    if current_state != BookingStates.waiting_for_date:
+        await callback.answer()
+        return
+    
     date = callback.data.replace("date_", "")
     
-    # Проверяем, закрыт ли день
     is_closed = await db.is_date_closed(date)
     if is_closed:
         await callback.answer("Этот день закрыт для записи", show_alert=True)
         return
     
-    # Проверяем доступные слоты
     slots = await db.get_available_slots(date)
     if not slots:
         await callback.answer("Нет доступных слотов на этот день", show_alert=True)
         return
     
-    # Сохраняем дату
     await state.update_data(selected_date=date)
     
     await callback.message.edit_text(
-        f"📅 <b>Выбрана дата:</b> {format_date_russian(date)}\n\n"
-        f"⏰ <b>Выберите время</b>:",
+        f"<b>Выбрана дата:</b> {format_date_russian(date)}\n\n"
+        f"<b>Выберите время</b>:",
         reply_markup=create_time_keyboard(slots, date),
         parse_mode="HTML"
     )
@@ -213,22 +196,25 @@ async def select_date(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("time_"), state=BookingStates.waiting_for_time)
+@router.callback_query(F.data.startswith("time_"))
 async def select_time(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Выбор времени."""
+    current_state = await state.get_state()
+    if current_state != BookingStates.waiting_for_time:
+        await callback.answer()
+        return
+    
     data = callback.data.replace("time_", "")
     parts = data.split("_")
     date = parts[0]
     time = parts[1]
     
-    # Сохраняем время
     await state.update_data(selected_time=time)
     
-    # Запрашиваем имя
     await callback.message.edit_text(
-        f"📅 <b>Дата:</b> {format_date_russian(date)}\n"
-        f"⏰ <b>Время:</b> {time}\n\n"
-        f"👤 Пожалуйста, введите ваше <b>имя</b>:",
+        f"<b>Дата:</b> {format_date_russian(date)}\n"
+        f"<b>Время:</b> {time}\n\n"
+        f"Пожалуйста, введите ваше <b>имя</b>:",
         parse_mode="HTML"
     )
     
@@ -248,8 +234,8 @@ async def get_name(message: Message, state: FSMContext):
     await state.update_data(user_name=name)
     
     await message.answer(
-        f"👤 <b>Имя:</b> {name}\n\n"
-        f"📱 Теперь введите ваш <b>номер телефона</b>:",
+        f"<b>Имя:</b> {name}\n\n"
+        f"Теперь введите ваш <b>номер телефона</b>:",
         parse_mode="HTML"
     )
     
@@ -261,26 +247,23 @@ async def get_phone(message: Message, state: FSMContext):
     """Получение номера телефона."""
     phone = message.text.strip()
     
-    # Простая проверка номера телефона
     if len(phone) < 5:
         await message.answer("Номер телефона слишком короткий. Пожалуйста, введите корректный номер:")
         return
     
     await state.update_data(user_phone=phone)
     
-    # Получаем данные
     data = await state.get_data()
     date = data["selected_date"]
     time = data["selected_time"]
     name = data["user_name"]
     
-    # Показываем подтверждение
     await message.answer(
-        f"📋 <b>Проверьте данные записи:</b>\n\n"
-        f"📅 <b>Дата:</b> {format_date_russian(date)}\n"
-        f"⏰ <b>Время:</b> {time}\n"
-        f"👤 <b>Имя:</b> {name}\n"
-        f"📱 <b>Телефон:</b> {phone}\n\n"
+        f"<b>Проверьте данные записи:</b>\n\n"
+        f"<b>Дата:</b> {format_date_russian(date)}\n"
+        f"<b>Время:</b> {time}\n"
+        f"<b>Имя:</b> {name}\n"
+        f"<b>Телефон:</b> {phone}\n\n"
         f"Подтвердите запись:",
         reply_markup=get_booking_confirmation_keyboard(date, time),
         parse_mode="HTML"
@@ -289,26 +272,29 @@ async def get_phone(message: Message, state: FSMContext):
     await state.set_state(BookingStates.waiting_for_confirmation)
 
 
-@router.callback_query(F.data.startswith("confirm_"), state=BookingStates.waiting_for_confirmation)
+@router.callback_query(F.data.startswith("confirm_"))
 async def confirm_booking(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Подтверждение записи."""
+    current_state = await state.get_state()
+    if current_state != BookingStates.waiting_for_confirmation:
+        await callback.answer()
+        return
+    
     data = callback.data.replace("confirm_", "")
     parts = data.split("_")
     date = parts[0]
     time = parts[1]
     
-    # Получаем данные из state
     user_data = await state.get_data()
     user_id = callback.from_user.id
     user_name = user_data["user_name"]
     phone = user_data["user_phone"]
     
-    # Создаем запись
     success = await db.create_booking(user_id, user_name, phone, date, time)
     
     if not success:
         await callback.message.edit_text(
-            "❌ <b>Ошибка!</b>\n\n"
+            "<b>Ошибка!</b>\n\n"
             "Это время уже занято. Пожалуйста, выберите другое.",
             reply_markup=get_main_menu_keyboard(),
             parse_mode="HTML"
@@ -317,45 +303,40 @@ async def confirm_booking(callback: CallbackQuery, bot: Bot, state: FSMContext):
         await callback.answer()
         return
     
-    # Получаем ID записи
     booking = await db.get_booking(user_id)
     if booking:
         booking_id = booking[0]
-        
-        # Планируем напоминание
-        await schedule_reminder(bot, user_id, date, time, booking_id, scheduler)
+        if scheduler:
+            await schedule_reminder(bot, user_id, date, time, booking_id, scheduler)
     
-    # Отправляем сообщение админу
     admin_message = (
-        f"🆕 <b>Новая запись!</b>\n\n"
-        f"👤 <b>Клиент:</b> {user_name}\n"
-        f"📱 <b>Телефон:</b> {phone}\n"
-        f"📅 <b>Дата:</b> {format_date_russian(date)}\n"
-        f"⏰ <b>Время:</b> {time}\n"
-        f"🆔 <b>TG ID:</b> {user_id}"
+        f"<b>Новая запись!</b>\n\n"
+        f"<b>Клиент:</b> {user_name}\n"
+        f"<b>Телефон:</b> {phone}\n"
+        f"<b>Дата:</b> {format_date_russian(date)}\n"
+        f"<b>Время:</b> {time}\n"
+        f"<b>TG ID:</b> {user_id}"
     )
     await bot.send_message(config.ADMIN_ID, admin_message, parse_mode="HTML")
     
-    # Отправляем сообщение в канал расписания
     channel_message = (
-        f"📅 <b>Расписание</b>\n\n"
-        f"📅 <b>Дата:</b> {format_date_russian(date)}\n"
-        f"⏰ <b>Время:</b> {time}\n"
-        f"👤 <b>Клиент:</b> {user_name}"
+        f"<b>Расписание</b>\n\n"
+        f"<b>Дата:</b> {format_date_russian(date)}\n"
+        f"<b>Время:</b> {time}\n"
+        f"<b>Клиент:</b> {user_name}"
     )
     try:
         await bot.send_message(config.SCHEDULE_CHANNEL_ID, channel_message, parse_mode="HTML")
     except Exception:
         pass
     
-    # Отправляем подтверждение пользователю
     await callback.message.edit_text(
-        f"✅ <b>Запись подтверждена!</b>\n\n"
-        f"📅 <b>Дата:</b> {format_date_russian(date)}\n"
-        f"⏰ <b>Время:</b> {time}\n"
-        f"👤 <b>Имя:</b> {user_name}\n"
-        f"📱 <b>Телефон:</b> {phone}\n\n"
-        f"Мы ждём вас! ✨",
+        f"<b>Запись подтверждена!</b>\n\n"
+        f"<b>Дата:</b> {format_date_russian(date)}\n"
+        f"<b>Время:</b> {time}\n"
+        f"<b>Имя:</b> {user_name}\n"
+        f"<b>Телефон:</b> {phone}\n\n"
+        f"Мы ждём вас! ",
         reply_markup=get_main_menu_keyboard(),
         parse_mode="HTML"
     )
@@ -364,19 +345,16 @@ async def confirm_booking(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await callback.answer()
 
 
-# ==================== Отмена записи ====================
-
 @router.callback_query(F.data == "cancel_booking")
 async def cancel_booking_start(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Начало отмены записи."""
     user_id = callback.from_user.id
     
-    # Проверяем, есть ли активная запись
     booking = await db.get_booking(user_id)
     
     if not booking:
         await callback.message.edit_text(
-            "❌ <b>У вас нет активной записи!</b>",
+            "<b>У вас нет активной записи!</b>",
             reply_markup=get_main_menu_keyboard(),
             parse_mode="HTML"
         )
@@ -385,12 +363,11 @@ async def cancel_booking_start(callback: CallbackQuery, bot: Bot, state: FSMCont
     
     booking_id, user_name, phone, date, time, created_at = booking
     
-    # Запрашиваем подтверждение
     await callback.message.edit_text(
-        f"❓ <b>Вы уверены, что хотите отменить запись?</b>\n\n"
-        f"📅 <b>Дата:</b> {format_date_russian(date)}\n"
-        f"⏰ <b>Время:</b> {time}\n"
-        f"👤 <b>Имя:</b> {user_name}",
+        f"<b>Вы уверены, что хотите отменить запись?</b>\n\n"
+        f"<b>Дата:</b> {format_date_russian(date)}\n"
+        f"<b>Время:</b> {time}\n"
+        f"<b>Имя:</b> {user_name}",
         reply_markup=get_cancel_confirmation_keyboard(booking_id),
         parse_mode="HTML"
     )
@@ -405,26 +382,22 @@ async def confirm_cancel_booking(callback: CallbackQuery, bot: Bot, state: FSMCo
     booking_id = int(callback.data.replace("confirm_cancel_", ""))
     user_id = callback.from_user.id
     
-    # Получаем информацию о записи для отмены напоминания
-    booking = await db.get_booking(user_id)
-    
-    # Отменяем запись
     success = await db.cancel_booking(user_id, booking_id)
     
     if success:
-        # Отменяем напоминание
         job_id = f"reminder_{booking_id}_{user_id}"
-        await cancel_reminder(job_id, scheduler)
+        if scheduler:
+            await cancel_reminder(job_id, scheduler)
         
         await callback.message.edit_text(
-            "✅ <b>Запись отменена!</b>\n\n"
+            "<b>Запись отменена!</b>\n\n"
             "Вы можете создать новую запись.",
             reply_markup=get_main_menu_keyboard(),
             parse_mode="HTML"
         )
     else:
         await callback.message.edit_text(
-            "❌ <b>Ошибка при отмене записи.</b>",
+            "<b>Ошибка при отмене записи.</b>",
             reply_markup=get_main_menu_keyboard(),
             parse_mode="HTML"
         )
@@ -433,17 +406,15 @@ async def confirm_cancel_booking(callback: CallbackQuery, bot: Bot, state: FSMCo
     await callback.answer()
 
 
-# ==================== Админ-панель ====================
-
 @router.message(F.text == "/admin")
 async def cmd_admin(message: Message, bot: Bot, state: FSMContext):
     """Команда админ-панели."""
     if message.from_user.id != config.ADMIN_ID:
-        await message.answer("⛔ У вас нет доступа к админ-панели.")
+        await message.answer("У вас нет доступа к админ-панели.")
         return
     
     await message.answer(
-        "🔧 <b>Админ-панель</b>\n\n"
+        "<b>Админ-панель</b>\n\n"
         "Выберите действие:",
         reply_markup=get_admin_keyboard(),
         parse_mode="HTML"
@@ -452,11 +423,11 @@ async def cmd_admin(message: Message, bot: Bot, state: FSMContext):
     await state.set_state(AdminStates.admin_menu)
 
 
-@router.callback_query(F.data == "admin_menu", state=AdminStates.admin_menu)
+@router.callback_query(F.data == "admin_menu")
 async def admin_menu(callback: CallbackQuery, bot: Bot):
     """Меню админ-панели."""
     await callback.message.edit_text(
-        "🔧 <b>Админ-панель</b>\n\n"
+        "<b>Админ-панель</b>\n\n"
         "Выберите действие:",
         reply_markup=get_admin_keyboard(),
         parse_mode="HTML"
@@ -464,12 +435,16 @@ async def admin_menu(callback: CallbackQuery, bot: Bot):
     await callback.answer()
 
 
-# Добавление рабочего дня
-@router.callback_query(F.data == "admin_add_date", state=AdminStates.admin_menu)
+@router.callback_query(F.data == "admin_add_date")
 async def admin_add_date(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Добавление рабочего дня."""
+    current_state = await state.get_state()
+    if current_state != AdminStates.admin_menu:
+        await callback.answer()
+        return
+    
     await callback.message.edit_text(
-        "📅 <b>Добавление рабочего дня</b>\n\n"
+        "<b>Добавление рабочего дня</b>\n\n"
         "Введите дату в формате ГГГГ-ММ-ДД (например, 2024-12-31):",
         parse_mode="HTML"
     )
@@ -477,9 +452,13 @@ async def admin_add_date(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await callback.answer()
 
 
-@router.message(state=AdminStates.waiting_for_date_to_add)
+@router.message()
 async def process_add_date(message: Message, state: FSMContext, bot: Bot):
     """Обработка добавления рабочего дня."""
+    current_state = await state.get_state()
+    if current_state != AdminStates.waiting_for_date_to_add:
+        return
+    
     date_str = message.text.strip()
     
     try:
@@ -487,22 +466,21 @@ async def process_add_date(message: Message, state: FSMContext, bot: Bot):
         date = date_obj.date().isoformat()
     except ValueError:
         await message.answer(
-            "❌ Неверный формат даты. Введите дату в формате ГГГГ-ММ-ДД:",
+            "Неверный формат даты. Введите дату в формате ГГГГ-ММ-ДД:",
             reply_markup=get_admin_keyboard()
         )
         return
     
     await db.add_work_day(date)
     
-    # Добавляем стандартные временные слоты (9:00 - 18:00)
     for hour in range(9, 19):
         time = f"{hour:02d}:00"
         await db.add_time_slot(date, time)
     
     await message.answer(
-        f"✅ <b>Рабочий день добавлен!</b>\n\n"
-        f"📅 Дата: {format_date_russian(date)}\n"
-        f"⏰ Добавлены слоты: 9:00 - 18:00",
+        f"<b>Рабочий день добавлен!</b>\n\n"
+        f"Дата: {format_date_russian(date)}\n"
+        f"Добавлены слоты: 9:00 - 18:00",
         reply_markup=get_admin_keyboard(),
         parse_mode="HTML"
     )
@@ -510,15 +488,19 @@ async def process_add_date(message: Message, state: FSMContext, bot: Bot):
     await state.set_state(AdminStates.admin_menu)
 
 
-# Добавление временного слота
-@router.callback_query(F.data == "admin_add_slot", state=AdminStates.admin_menu)
+@router.callback_query(F.data == "admin_add_slot")
 async def admin_add_slot(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    """Добавление временного слота - выбор даты."""
+    """Добавление временного слота."""
+    current_state = await state.get_state()
+    if current_state != AdminStates.admin_menu:
+        await callback.answer()
+        return
+    
     dates = await db.get_available_dates()
     
     if not dates:
         await callback.message.edit_text(
-            "❌ Нет доступных дат.",
+            "Нет доступных дат.",
             reply_markup=get_admin_keyboard(),
             parse_mode="HTML"
         )
@@ -526,7 +508,7 @@ async def admin_add_slot(callback: CallbackQuery, bot: Bot, state: FSMContext):
         return
     
     await callback.message.edit_text(
-        "📅 <b>Добавление временного слота</b>\n\n"
+        "<b>Добавление временного слота</b>\n\n"
         "Выберите дату:",
         reply_markup=get_admin_dates_keyboard(dates, "admin_slot_date"),
         parse_mode="HTML"
@@ -536,16 +518,21 @@ async def admin_add_slot(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("admin_slot_date_"), state=AdminStates.waiting_for_slot_date)
+@router.callback_query(F.data.startswith("admin_slot_date_"))
 async def admin_select_slot_date(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Выбор даты для добавления слота."""
+    current_state = await state.get_state()
+    if current_state != AdminStates.waiting_for_slot_date:
+        await callback.answer()
+        return
+    
     date = callback.data.replace("admin_slot_date_", "")
     
     await state.update_data(slot_date=date)
     
     await callback.message.edit_text(
-        f"📅 <b>Дата:</b> {format_date_russian(date)}\n\n"
-        f"⏰ Введите время в формате ЧЧ:ММ (например, 14:30):",
+        f"<b>Дата:</b> {format_date_russian(date)}\n\n"
+        f"Введите время в формате ЧЧ:ММ (например, 14:30):",
         parse_mode="HTML"
     )
     
@@ -553,16 +540,20 @@ async def admin_select_slot_date(callback: CallbackQuery, bot: Bot, state: FSMCo
     await callback.answer()
 
 
-@router.message(state=AdminStates.waiting_for_slot_time)
+@router.message()
 async def process_add_slot(message: Message, state: FSMContext, bot: Bot):
     """Обработка добавления временного слота."""
+    current_state = await state.get_state()
+    if current_state != AdminStates.waiting_for_slot_time:
+        return
+    
     time = message.text.strip()
     
     try:
         datetime.strptime(time, "%H:%M")
     except ValueError:
         await message.answer(
-            "❌ Неверный формат времени. Введите время в формате ЧЧ:ММ:",
+            "Неверный формат времени. Введите время в формате ЧЧ:ММ:",
             reply_markup=get_admin_keyboard()
         )
         return
@@ -574,15 +565,15 @@ async def process_add_slot(message: Message, state: FSMContext, bot: Bot):
     
     if success:
         await message.answer(
-            f"✅ <b>Временной слот добавлен!</b>\n\n"
-            f"📅 Дата: {format_date_russian(date)}\n"
-            f"⏰ Время: {time}",
+            f"<b>Временной слот добавлен!</b>\n\n"
+            f"Дата: {format_date_russian(date)}\n"
+            f"Время: {time}",
             reply_markup=get_admin_keyboard(),
             parse_mode="HTML"
         )
     else:
         await message.answer(
-            "⚠️ <b>Этот слот уже существует.</b>",
+            "<b>Этот слот уже существует.</b>",
             reply_markup=get_admin_keyboard(),
             parse_mode="HTML"
         )
@@ -590,15 +581,19 @@ async def process_add_slot(message: Message, state: FSMContext, bot: Bot):
     await state.set_state(AdminStates.admin_menu)
 
 
-# Удаление временного слота
-@router.callback_query(F.data == "admin_remove_slot", state=AdminStates.admin_menu)
+@router.callback_query(F.data == "admin_remove_slot")
 async def admin_remove_slot(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    """Удаление временного слота - выбор даты."""
+    """Удаление временного слота."""
+    current_state = await state.get_state()
+    if current_state != AdminStates.admin_menu:
+        await callback.answer()
+        return
+    
     dates = await db.get_available_dates()
     
     if not dates:
         await callback.message.edit_text(
-            "❌ Нет доступных дат.",
+            "Нет доступных дат.",
             reply_markup=get_admin_keyboard(),
             parse_mode="HTML"
         )
@@ -606,7 +601,7 @@ async def admin_remove_slot(callback: CallbackQuery, bot: Bot, state: FSMContext
         return
     
     await callback.message.edit_text(
-        "🗑️ <b>Удаление временного слота</b>\n\n"
+        "<b>Удаление временного слота</b>\n\n"
         "Выберите дату:",
         reply_markup=get_admin_dates_keyboard(dates, "admin_remove_slot_date"),
         parse_mode="HTML"
@@ -616,16 +611,21 @@ async def admin_remove_slot(callback: CallbackQuery, bot: Bot, state: FSMContext
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("admin_remove_slot_date_"), state=AdminStates.waiting_for_slot_to_remove)
+@router.callback_query(F.data.startswith("admin_remove_slot_date_"))
 async def admin_select_remove_slot_date(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Выбор даты для удаления слота."""
+    current_state = await state.get_state()
+    if current_state != AdminStates.waiting_for_slot_to_remove:
+        await callback.answer()
+        return
+    
     date = callback.data.replace("admin_remove_slot_date_", "")
     
     slots = await db.get_all_slots(date)
     
     if not slots:
         await callback.message.edit_text(
-            "❌ Нет слотов на эту дату.",
+            "Нет слотов на эту дату.",
             reply_markup=get_admin_keyboard(),
             parse_mode="HTML"
         )
@@ -635,8 +635,8 @@ async def admin_select_remove_slot_date(callback: CallbackQuery, bot: Bot, state
     await state.update_data(remove_slot_date=date)
     
     await callback.message.edit_text(
-        f"📅 <b>Дата:</b> {format_date_russian(date)}\n\n"
-        f"🗑️ <b>Выберите слот для удаления</b> (зеленый - доступен, красный - занят):",
+        f"<b>Дата:</b> {format_date_russian(date)}\n\n"
+        f"<b>Выберите слот для удаления</b>:",
         reply_markup=get_admin_slots_keyboard(slots, date, "confirm_remove_slot"),
         parse_mode="HTML"
     )
@@ -655,15 +655,15 @@ async def confirm_remove_slot(callback: CallbackQuery, bot: Bot, state: FSMConte
     
     if success:
         await callback.message.edit_text(
-            f"✅ <b>Слот удалён!</b>\n\n"
-            f"📅 Дата: {format_date_russian(date)}\n"
-            f"⏰ Время: {time}",
+            f"<b>Слот удалён!</b>\n\n"
+            f"Дата: {format_date_russian(date)}\n"
+            f"Время: {time}",
             reply_markup=get_admin_keyboard(),
             parse_mode="HTML"
         )
     else:
         await callback.message.edit_text(
-            "❌ Не удалось удалить слот (возможно, он уже занят).",
+            "Не удалось удалить слот.",
             reply_markup=get_admin_keyboard(),
             parse_mode="HTML"
         )
@@ -672,15 +672,19 @@ async def confirm_remove_slot(callback: CallbackQuery, bot: Bot, state: FSMConte
     await callback.answer()
 
 
-# Закрытие дня
-@router.callback_query(F.data == "admin_close_day", state=AdminStates.admin_menu)
+@router.callback_query(F.data == "admin_close_day")
 async def admin_close_day(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Закрытие дня."""
+    current_state = await state.get_state()
+    if current_state != AdminStates.admin_menu:
+        await callback.answer()
+        return
+    
     dates = await db.get_available_dates()
     
     if not dates:
         await callback.message.edit_text(
-            "❌ Нет доступных дат.",
+            "Нет доступных дат.",
             reply_markup=get_admin_keyboard(),
             parse_mode="HTML"
         )
@@ -688,7 +692,7 @@ async def admin_close_day(callback: CallbackQuery, bot: Bot, state: FSMContext):
         return
     
     await callback.message.edit_text(
-        "🔒 <b>Закрытие дня</b>\n\n"
+        "<b>Закрытие дня</b>\n\n"
         "Выберите дату для закрытия:",
         reply_markup=get_admin_dates_keyboard(dates, "confirm_close_day"),
         parse_mode="HTML"
@@ -706,8 +710,8 @@ async def confirm_close_day(callback: CallbackQuery, bot: Bot, state: FSMContext
     await db.close_day(date)
     
     await callback.message.edit_text(
-        f"✅ <b>День закрыт!</b>\n\n"
-        f"📅 Дата: {format_date_russian(date)}",
+        f"<b>День закрыт!</b>\n\n"
+        f"Дата: {format_date_russian(date)}",
         reply_markup=get_admin_keyboard(),
         parse_mode="HTML"
     )
@@ -716,15 +720,19 @@ async def confirm_close_day(callback: CallbackQuery, bot: Bot, state: FSMContext
     await callback.answer()
 
 
-# Открытие дня
-@router.callback_query(F.data == "admin_open_day", state=AdminStates.admin_menu)
+@router.callback_query(F.data == "admin_open_day")
 async def admin_open_day(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Открытие дня."""
+    current_state = await state.get_state()
+    if current_state != AdminStates.admin_menu:
+        await callback.answer()
+        return
+    
     dates = await db.get_available_dates()
     
     if not dates:
         await callback.message.edit_text(
-            "❌ Нет доступных дат.",
+            "Нет доступных дат.",
             reply_markup=get_admin_keyboard(),
             parse_mode="HTML"
         )
@@ -732,7 +740,7 @@ async def admin_open_day(callback: CallbackQuery, bot: Bot, state: FSMContext):
         return
     
     await callback.message.edit_text(
-        "🔓 <b>Открытие дня</b>\n\n"
+        "<b>Открытие дня</b>\n\n"
         "Выберите дату для открытия:",
         reply_markup=get_admin_dates_keyboard(dates, "confirm_open_day"),
         parse_mode="HTML"
@@ -750,8 +758,8 @@ async def confirm_open_day(callback: CallbackQuery, bot: Bot, state: FSMContext)
     await db.open_day(date)
     
     await callback.message.edit_text(
-        f"✅ <b>День открыт!</b>\n\n"
-        f"📅 Дата: {format_date_russian(date)}",
+        f"<b>День открыт!</b>\n\n"
+        f"Дата: {format_date_russian(date)}",
         reply_markup=get_admin_keyboard(),
         parse_mode="HTML"
     )
@@ -760,15 +768,19 @@ async def confirm_open_day(callback: CallbackQuery, bot: Bot, state: FSMContext)
     await callback.answer()
 
 
-# Просмотр расписания
-@router.callback_query(F.data == "admin_view_schedule", state=AdminStates.admin_menu)
+@router.callback_query(F.data == "admin_view_schedule")
 async def admin_view_schedule(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    """Просмотр расписания - выбор даты."""
+    """Просмотр расписания."""
+    current_state = await state.get_state()
+    if current_state != AdminStates.admin_menu:
+        await callback.answer()
+        return
+    
     dates = await db.get_available_dates()
     
     if not dates:
         await callback.message.edit_text(
-            "❌ Нет доступных дат.",
+            "Нет доступных дат.",
             reply_markup=get_admin_keyboard(),
             parse_mode="HTML"
         )
@@ -776,7 +788,7 @@ async def admin_view_schedule(callback: CallbackQuery, bot: Bot, state: FSMConte
         return
     
     await callback.message.edit_text(
-        "📋 <b>Просмотр расписания</b>\n\n"
+        "<b>Просмотр расписания</b>\n\n"
         "Выберите дату:",
         reply_markup=get_admin_dates_keyboard(dates, "view_schedule_date"),
         parse_mode="HTML"
@@ -791,24 +803,22 @@ async def view_schedule(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Просмотр расписания на дату."""
     date = callback.data.replace("view_schedule_date_", "")
     
-    # Получаем все записи на дату
     bookings = await db.get_all_bookings(date)
     slots = await db.get_all_slots(date)
     
-    message = f"📋 <b>Расписание на {format_date_russian(date)}</b>\n\n"
+    message = f"<b>Расписание на {format_date_russian(date)}</b>\n\n"
     
-    # Формируем информацию о слотах
     if slots:
         message += "<b>Все слоты:</b>\n"
         for time, is_available in slots:
-            status = "✅ Свободно" if is_available else "❌ Занято"
-            message += f"• {time} — {status}\n"
+            status = "Свободно" if is_available else "Занято"
+            message += f"- {time} - {status}\n"
     
     if bookings:
         message += "\n<b>Записи:</b>\n"
         for booking in bookings:
             _, _, user_name, phone, _, time, _ = booking
-            message += f"• {time} — {user_name} ({phone})\n"
+            message += f"- {time} - {user_name} ({phone})\n"
     else:
         message += "\n<b>Записей пока нет.</b>"
     
@@ -822,15 +832,19 @@ async def view_schedule(callback: CallbackQuery, bot: Bot, state: FSMContext):
     await callback.answer()
 
 
-# Отмена записи клиента
-@router.callback_query(F.data == "admin_cancel_booking", state=AdminStates.admin_menu)
+@router.callback_query(F.data == "admin_cancel_booking")
 async def admin_cancel_booking(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    """Отмена записи клиента - выбор записи."""
+    """Отмена записи клиента."""
+    current_state = await state.get_state()
+    if current_state != AdminStates.admin_menu:
+        await callback.answer()
+        return
+    
     bookings = await db.get_all_bookings()
     
     if not bookings:
         await callback.message.edit_text(
-            "❌ Нет активных записей.",
+            "Нет активных записей.",
             reply_markup=get_admin_keyboard(),
             parse_mode="HTML"
         )
@@ -838,7 +852,7 @@ async def admin_cancel_booking(callback: CallbackQuery, bot: Bot, state: FSMCont
         return
     
     await callback.message.edit_text(
-        "❌ <b>Отмена записи клиента</b>\n\n"
+        "<b>Отмена записи клиента</b>\n\n"
         "Выберите запись для отмены:",
         reply_markup=get_admin_bookings_keybook(bookings, "admin_confirm_cancel"),
         parse_mode="HTML"
@@ -853,13 +867,12 @@ async def admin_confirm_cancel(callback: CallbackQuery, bot: Bot, state: FSMCont
     """Подтверждение отмены записи админом."""
     booking_id = int(callback.data.replace("admin_confirm_cancel_", ""))
     
-    # Получаем информацию о записи
     bookings = await db.get_all_bookings()
     booking = next((b for b in bookings if b[0] == booking_id), None)
     
     if not booking:
         await callback.message.edit_text(
-            "❌ Запись не найдена.",
+            "Запись не найдена.",
             reply_markup=get_admin_keyboard(),
             parse_mode="HTML"
         )
@@ -868,30 +881,28 @@ async def admin_confirm_cancel(callback: CallbackQuery, bot: Bot, state: FSMCont
     
     _, user_id, user_name, phone, date, time, _ = booking
     
-    # Отменяем запись
     await db.cancel_booking(user_id, booking_id)
     
-    # Отменяем напоминание
     job_id = f"reminder_{booking_id}_{user_id}"
-    await cancel_reminder(job_id, scheduler)
+    if scheduler:
+        await cancel_reminder(job_id, scheduler)
     
-    # Уведомляем пользователя
     try:
         await bot.send_message(
             user_id,
-            f"❌ <b>Ваша запись была отменена администратором.</b>\n\n"
-            f"📅 Дата: {format_date_russian(date)}\n"
-            f"⏰ Время: {time}",
+            f"<b>Ваша запись была отменена администратором.</b>\n\n"
+            f"Дата: {format_date_russian(date)}\n"
+            f"Время: {time}",
             parse_mode="HTML"
         )
     except Exception:
         pass
     
     await callback.message.edit_text(
-        f"✅ <b>Запись отменена!</b>\n\n"
-        f"👤 Клиент: {user_name}\n"
-        f"📅 Дата: {format_date_russian(date)}\n"
-        f"⏰ Время: {time}",
+        f"<b>Запись отменена!</b>\n\n"
+        f"Клиент: {user_name}\n"
+        f"Дата: {format_date_russian(date)}\n"
+        f"Время: {time}",
         reply_markup=get_admin_keyboard(),
         parse_mode="HTML"
     )
