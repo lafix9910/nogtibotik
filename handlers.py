@@ -33,20 +33,26 @@ router = Router()
 @router.message(F.text == "/start")
 async def cmd_start(message: Message, bot: Bot):
     """Обработчик команды /start."""
+    user_id = message.from_user.id
+    has_booking = await db.has_active_booking(user_id)
+    
     await message.answer(
         f"Добро пожаловать к мастеру маникюра {config.MASTER_NAME}! \n\n"
         f"Выберите действие из меню ниже:",
-        reply_markup=get_main_menu_keyboard()
+        reply_markup=get_main_menu_keyboard(has_booking)
     )
 
 
 @router.callback_query(F.data == "back_to_menu")
 async def back_to_menu(callback: CallbackQuery, bot: Bot):
     """Возврат в главное меню."""
+    user_id = callback.from_user.id
+    has_booking = await db.has_active_booking(user_id)
+    
     await callback.message.edit_text(
         f"Добро пожаловать к мастеру маникюра {config.MASTER_NAME}! \n\n"
         f"Выберите действие из меню ниже:",
-        reply_markup=get_main_menu_keyboard()
+        reply_markup=get_main_menu_keyboard(has_booking)
     )
     await callback.answer()
 
@@ -82,13 +88,14 @@ async def check_user_subscription(callback: CallbackQuery, bot: Bot, state: FSMC
     user_id = callback.from_user.id
     
     is_subscribed = await check_subscription(bot, user_id)
+    user_has_booking = await db.has_active_booking(user_id)
     
     if is_subscribed:
         await state.update_data(subscription_verified=True)
         await callback.message.edit_text(
             "<b>Подписка подтверждена!</b>\n\n"
             "Теперь вы можете записаться на приём.",
-            reply_markup=get_main_menu_keyboard(),
+            reply_markup=get_main_menu_keyboard(user_has_booking),
             parse_mode="HTML"
         )
     else:
@@ -107,23 +114,26 @@ async def start_booking(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Начало процесса записи."""
     user_id = callback.from_user.id
     
-    is_subscribed = await check_subscription(bot, user_id)
-    if not is_subscribed:
-        await callback.message.edit_text(
-            "<b>Вы не подписаны на канал</b>\n\n"
-            "Для записи необходимо подписаться на канал.",
-            reply_markup=get_subscription_keyboard(),
-            parse_mode="HTML"
-        )
-        await callback.answer()
-        return
+    # Проверка подписки (если канал настроен)
+    is_subscribed = True
+    if config.CHANNEL_ID:
+        is_subscribed = await check_subscription(bot, user_id)
+        if not is_subscribed:
+            await callback.message.edit_text(
+                "<b>Вы не подписаны на канал</b>\n\n"
+                "Для записи необходимо подписаться на канал.",
+                reply_markup=get_subscription_keyboard(),
+                parse_mode="HTML"
+            )
+            await callback.answer()
+            return
     
     has_booking = await db.has_active_booking(user_id)
     if has_booking:
         await callback.message.edit_text(
             "<b>У вас уже есть активная запись!</b>\n\n"
             "Вы можете отменить её и создать новую.",
-            reply_markup=get_main_menu_keyboard(),
+            reply_markup=get_main_menu_keyboard(True),
             parse_mode="HTML"
         )
         await callback.answer()
@@ -296,7 +306,7 @@ async def confirm_booking(callback: CallbackQuery, bot: Bot, state: FSMContext):
         await callback.message.edit_text(
             "<b>Ошибка!</b>\n\n"
             "Это время уже занято. Пожалуйста, выберите другое.",
-            reply_markup=get_main_menu_keyboard(),
+            reply_markup=get_main_menu_keyboard(True),
             parse_mode="HTML"
         )
         await state.clear()
@@ -337,7 +347,7 @@ async def confirm_booking(callback: CallbackQuery, bot: Bot, state: FSMContext):
         f"<b>Имя:</b> {user_name}\n"
         f"<b>Телефон:</b> {phone}\n\n"
         f"Мы ждём вас! ",
-        reply_markup=get_main_menu_keyboard(),
+        reply_markup=get_main_menu_keyboard(True),
         parse_mode="HTML"
     )
     
@@ -355,7 +365,7 @@ async def cancel_booking_start(callback: CallbackQuery, bot: Bot, state: FSMCont
     if not booking:
         await callback.message.edit_text(
             "<b>У вас нет активной записи!</b>",
-            reply_markup=get_main_menu_keyboard(),
+            reply_markup=get_main_menu_keyboard(True),
             parse_mode="HTML"
         )
         await callback.answer()
@@ -392,13 +402,13 @@ async def confirm_cancel_booking(callback: CallbackQuery, bot: Bot, state: FSMCo
         await callback.message.edit_text(
             "<b>Запись отменена!</b>\n\n"
             "Вы можете создать новую запись.",
-            reply_markup=get_main_menu_keyboard(),
+            reply_markup=get_main_menu_keyboard(True),
             parse_mode="HTML"
         )
     else:
         await callback.message.edit_text(
             "<b>Ошибка при отмене записи.</b>",
-            reply_markup=get_main_menu_keyboard(),
+            reply_markup=get_main_menu_keyboard(True),
             parse_mode="HTML"
         )
     
