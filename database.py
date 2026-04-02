@@ -66,7 +66,7 @@ class Database:
             await db.commit()
 
     async def generate_work_days(self):
-        """Генерация рабочих дней на 1 месяц вперед."""
+        """Генерация рабочих дней на 1 неделю вперед."""
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute("SELECT date FROM work_days")
             existing_dates = {row[0] for row in await cursor.fetchall()}
@@ -74,7 +74,7 @@ class Database:
             today = datetime.now().date()
             new_dates = []
 
-            for i in range(31):
+            for i in range(7):
                 date = today + timedelta(days=i)
                 date_str = date.isoformat()
                 if date_str not in existing_dates:
@@ -357,16 +357,33 @@ class Database:
             )
             await db.commit()
 
-    async def add_work_day(self, date: str):
-        """Добавление рабочего дня."""
+    async def get_all_dates(self) -> List[str]:
+        """Получение всех рабочих дат (включая закрытые)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("""
+                SELECT date FROM work_days 
+                ORDER BY date
+            """)
+            return [row[0] for row in await cursor.fetchall()]
+    
+    async def add_single_work_day(self, date: str):
+        """Добавление одного рабочего дня со слотами."""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "INSERT OR IGNORE INTO work_days (date) VALUES (?)",
                 (date,)
             )
             await db.commit()
-
-    async def remove_work_day(self, date: str):
+            
+            for hour in range(9, 19):
+                time = f"{hour:02d}:00"
+                await db.execute(
+                    "INSERT OR IGNORE INTO time_slots (date, time) VALUES (?, ?)",
+                    (date, time)
+                )
+            await db.commit()
+    
+    async def remove_single_work_day(self, date: str):
         """Удаление рабочего дня и всех слотов."""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("DELETE FROM time_slots WHERE date = ?", (date,))

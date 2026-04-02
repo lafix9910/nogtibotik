@@ -481,11 +481,7 @@ async def process_add_date(message: Message, state: FSMContext, bot: Bot):
         )
         return
     
-    await db.add_work_day(date)
-    
-    for hour in range(9, 19):
-        time = f"{hour:02d}:00"
-        await db.add_time_slot(date, time)
+    await db.add_single_work_day(date)
     
     await message.answer(
         f"<b>Рабочий день добавлен!</b>\n\n"
@@ -498,6 +494,54 @@ async def process_add_date(message: Message, state: FSMContext, bot: Bot):
     await state.set_state(AdminStates.admin_menu)
 
 
+@router.callback_query(F.data == "admin_remove_day")
+async def admin_remove_day(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    """Удаление рабочего дня."""
+    current_state = await state.get_state()
+    if current_state != AdminStates.admin_menu:
+        await callback.answer()
+        return
+    
+    dates = await db.get_all_dates()
+    
+    if not dates:
+        await callback.message.edit_text(
+            "Нет рабочих дней.",
+            reply_markup=get_admin_keyboard(),
+            parse_mode="HTML"
+        )
+        await callback.answer()
+        return
+    
+    await callback.message.edit_text(
+        "<b>Удаление рабочего дня</b>\n\n"
+        "Выберите дату для удаления:",
+        reply_markup=get_admin_dates_keyboard(dates, "confirm_remove_day"),
+        parse_mode="HTML"
+    )
+    
+    await state.set_state(AdminStates.waiting_for_day_to_remove)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("confirm_remove_day_"))
+async def confirm_remove_day(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    """Подтверждение удаления рабочего дня."""
+    date = callback.data.replace("confirm_remove_day_", "")
+    
+    await db.remove_single_work_day(date)
+    
+    await callback.message.edit_text(
+        f"<b>Рабочий день удалён!</b>\n\n"
+        f"Дата: {format_date_russian(date)}",
+        reply_markup=get_admin_keyboard(),
+        parse_mode="HTML"
+    )
+    
+    await state.set_state(AdminStates.admin_menu)
+    await callback.answer()
+
+
 @router.callback_query(F.data == "admin_add_slot")
 async def admin_add_slot(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """Добавление временного слота."""
@@ -506,11 +550,11 @@ async def admin_add_slot(callback: CallbackQuery, bot: Bot, state: FSMContext):
         await callback.answer()
         return
     
-    dates = await db.get_available_dates()
+    dates = await db.get_all_dates()
     
     if not dates:
         await callback.message.edit_text(
-            "Нет доступных дат.",
+            "Нет рабочих дней.",
             reply_markup=get_admin_keyboard(),
             parse_mode="HTML"
         )

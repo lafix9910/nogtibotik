@@ -137,6 +137,7 @@ def get_admin_keyboard() -> InlineKeyboardMarkup:
     """Админ-панель."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📅 Добавить рабочий день", callback_data="admin_add_date")],
+        [InlineKeyboardButton(text="🗑️ Удалить рабочий день", callback_data="admin_remove_day")],
         [InlineKeyboardButton(text="⏰ Добавить временной слот", callback_data="admin_add_slot")],
         [InlineKeyboardButton(text="🗑️ Удалить временной слот", callback_data="admin_remove_slot")],
         [InlineKeyboardButton(text="🔒 Закрыть день", callback_data="admin_close_day")],
